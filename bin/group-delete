@@ -1,0 +1,51 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: group-delete --group NAME [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: group-delete --group NAME [--dry-run]
+
+Delete a shared collaboration group and its shared directory at
+/home/agents/shared/NAME.
+
+Options:
+  --group NAME   Group name to delete (required)
+  --dry-run      Print the commands that would run, without
+                 making changes
+EOF
+  exit 0
+}
+
+GROUP_NAME=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --group) GROUP_NAME="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$GROUP_NAME" ]] || usage
+validate_identifier "$GROUP_NAME" "group"
+
+SHARED_DIR="/home/agents/shared/$GROUP_NAME"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "+ groupdel $GROUP_NAME"
+  echo "+ rm -rf $SHARED_DIR"
+  exit 0
+fi
+
+groupdel "$GROUP_NAME"
+rm -rf "$SHARED_DIR"

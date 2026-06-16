@@ -1,0 +1,115 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: bwrap-config-apply --user NAME [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: bwrap-config-apply --user NAME [--dry-run]
+
+Rebuild a subaccount's bwrap sandbox launcher (~/.subagent/launcher) from
+scratch based on its ~/.subagent/config file.
+
+Options:
+  --user NAME   Username whose sandbox launcher to rebuild (required)
+  --dry-run     Show the current and proposed launcher without writing it
+EOF
+  exit 0
+}
+
+USER_NAME=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+
+HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+CONFIG_FILE="$HOME_DIR/.subagent/config"
+LAUNCHER_FILE="$HOME_DIR/.subagent/launcher"
+
+[[ -f "$CONFIG_FILE" ]] || { echo "Error: $CONFIG_FILE not found" >&2; exit 1; }
+
+read_config() {
+  grep -E "^$1=" "$CONFIG_FILE" | tail -n1 | cut -d= -f2- || true
+}
+
+NETWORK=$(read_config NETWORK)
+RO_BINDS=$(read_config RO_BINDS)
+RW_BINDS=$(read_config RW_BINDS)
+EXTRA_RO_BINDS=$(read_config EXTRA_RO_BINDS)
+
+generate_launcher() {
+  echo '#!/bin/bash'
+  echo 'bwrap_args=('
+  echo '  --unshare-ipc --unshare-pid --unshare-uts'
+  if [[ "$NETWORK" != "full" ]]; then
+    echo '  --unshare-net'
+  fi
+  echo '  --proc /proc --dev /dev --tmpfs /tmp'
+  printf '  --bind %q %q\n' "$HOME_DIR" "$HOME_DIR"
+
+  local path
+  set -f
+  for path in $RO_BINDS; do
+    printf '  --ro-bind-try %q %q\n' "$path" "$path"
+  done
+
+  local pair host sandbox
+  for pair in $RW_BINDS; do
+    host="${pair%%:*}"
+    sandbox="${pair##*:}"
+    printf '  --bind-try %q %q\n' "$host" "$sandbox"
+  done
+
+  for path in $EXTRA_RO_BINDS; do
+    printf '  --ro-bind-try %q %q\n' "$path" "$path"
+  done
+  set +f
+
+  echo '  --'
+  echo ')'
+  printf '%s\n' \
+    'if [ "$#" -gt 0 ]; then' \
+    '    exec bwrap "${bwrap_args[@]}" "$@"' \
+    'else' \
+    '    exec bwrap "${bwrap_args[@]}" /bin/bash -l' \
+    'fi'
+}
+
+NEW_LAUNCHER="$(generate_launcher)"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "--- $LAUNCHER_FILE (current) ---"
+  if [[ -f "$LAUNCHER_FILE" ]]; then
+    cat "$LAUNCHER_FILE"
+  else
+    echo "(does not exist)"
+  fi
+  echo "--- $LAUNCHER_FILE (new) ---"
+  printf '%s\n' "$NEW_LAUNCHER"
+  exit 0
+fi
+
+printf '%s\n' "$NEW_LAUNCHER" > "$LAUNCHER_FILE"
+chmod 750 "$LAUNCHER_FILE"
+chown agents:agents "$CONFIG_FILE"
+# The subaccount's own tmux session execs this file directly, so it must be
+# readable+executable by the subaccount. Group-own it by the subaccount's own
+# primary group (not "agents") so it stays read-only to the subaccount --
+# only `agents`/root (the owner) can write it.
+chown "agents:$USER_NAME" "$LAUNCHER_FILE"

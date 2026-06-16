@@ -1,0 +1,98 @@
+#!/bin/bash
+# Convenience entry point for the scripts in this directory. Each script can
+# still be run standalone; this just saves typing the full path and adds
+# `sudo` for the scripts that need root.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# All scripts dispatchable via `subagent SCRIPT ...`, in the order shown by
+# `subagent --help`.
+ALL_SCRIPTS=(
+  create-subaccount
+  delete-subaccount
+  modify-subaccount
+  setup-skeleton
+  backup-subaccount
+  bwrap-config-apply
+  bwrap-config-set
+  group-create
+  group-delete
+  show-subaccount
+  exec-in
+)
+
+# Override for testing: set to "" to run sub-scripts directly without sudo.
+SUDO_CMD="${SUBAGENTS_TEST_SUDO_CMD-sudo}"
+
+is_known_script() {
+  local script
+  for script in "${ALL_SCRIPTS[@]}"; do
+    [[ "$script" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+usage() {
+  echo "Usage: subagent --help [SCRIPT] | SCRIPT [ARGS...]" >&2
+  echo "Run 'subagent --help' for a list of available scripts, or" >&2
+  echo "'subagent --help SCRIPT' for help on a specific script." >&2
+  exit 1
+}
+
+print_help() {
+  cat <<EOF
+Usage: subagent --help [SCRIPT] | SCRIPT [ARGS...]
+
+Convenience entry point for the subagent management scripts in
+$SCRIPT_DIR. Each script can still be run standalone.
+
+  subagent --help          Show this help and list available scripts
+  subagent --help SCRIPT   Show the usage/help for SCRIPT only
+  subagent SCRIPT ARGS     Run SCRIPT with ARGS (uses sudo automatically for
+                            scripts that require root)
+
+Available scripts:
+EOF
+  local script
+  for script in "${ALL_SCRIPTS[@]}"; do
+    echo "  $script"
+  done
+}
+
+[[ $# -gt 0 ]] || usage
+
+case "$1" in
+  -h|--help)
+    if [[ $# -ge 2 ]]; then
+      SCRIPT="$2"
+      if ! is_known_script "$SCRIPT"; then
+        echo "Error: unknown script '$SCRIPT'" >&2
+        usage
+      fi
+      exec "$SCRIPT_DIR/$SCRIPT" --help
+    fi
+    print_help
+    exit 0
+    ;;
+esac
+
+SCRIPT="$1"
+shift
+
+case "$SCRIPT" in
+  create-subaccount|delete-subaccount|modify-subaccount|bwrap-config-set|group-create|group-delete|exec-in)
+    if [[ -n "$SUDO_CMD" ]]; then
+      exec "$SUDO_CMD" "$SCRIPT_DIR/$SCRIPT" "$@"
+    else
+      exec "$SCRIPT_DIR/$SCRIPT" "$@"
+    fi
+    ;;
+  setup-skeleton|backup-subaccount|bwrap-config-apply|show-subaccount)
+    exec "$SCRIPT_DIR/$SCRIPT" "$@"
+    ;;
+  *)
+    echo "Error: unknown script '$SCRIPT'" >&2
+    usage
+    ;;
+esac

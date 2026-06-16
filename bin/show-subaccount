@@ -1,0 +1,120 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+readonly GECOS_TAG="subagent-managed -"
+
+usage() {
+  echo "Usage: show-subaccount --user <name> [--help]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: show-subaccount --user <name> [--help]
+
+Display information about a subaccount: account details, group membership,
+bwrap sandbox configuration, and running processes.
+
+Options:
+  --user NAME   Username to inspect (required)
+  -h, --help    Show this help and exit 0
+EOF
+  exit 0
+}
+
+USER_NAME=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+
+# Look up account
+passwd_entry=$(getent passwd "$USER_NAME" 2>/dev/null) || {
+  echo "Error: user '$USER_NAME' not found" >&2
+  exit 1
+}
+
+# Parse fields from colon-separated passwd entry
+# format: name:password:uid:gid:gecos:home:shell
+IFS=: read -r _name _pw uid gid gecos _home _shell <<< "$passwd_entry"
+
+# Verify GECOS tag
+if [[ "$gecos" != "$GECOS_TAG"* ]]; then
+  echo "Error: user '$USER_NAME' is not a subagent-managed account (GECOS: '$gecos')" >&2
+  exit 1
+fi
+
+# Account section
+echo "Account:  $USER_NAME  uid=$uid  gid=$gid"
+echo "Comment:  $gecos"
+
+# Groups section
+groups_line=$(id -Gn "$USER_NAME" 2>/dev/null || true)
+echo "Groups:   $groups_line"
+echo ""
+
+# Bwrap config section
+HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+config_file="$HOME_DIR/.subagent/config"
+echo "Bwrap config ($config_file):"
+if [[ -f "$config_file" ]]; then
+  while IFS= read -r line; do
+    echo "  $line"
+  done < "$config_file"
+else
+  echo "  (no config)"
+fi
+echo ""
+
+# Processes section
+echo "Processes:"
+any_process=0
+bwrap_line=""
+
+# Check for tmux socket
+tmux_socket="/tmp/tmux-${uid}/default"
+if [[ -S "$tmux_socket" ]]; then
+  tmux_out=$(tmux -S "$tmux_socket" ls 2>/dev/null || true)
+  if [[ -n "$tmux_out" ]]; then
+    while IFS= read -r session_line; do
+      # tmux ls format: "session-name: N windows (created ...) [attached]"
+      session_name="${session_line%%:*}"
+      if echo "$session_line" | grep -q "\[attached\]"; then
+        status="attached"
+      else
+        status="detached"
+      fi
+      echo "  tmux: session \"$session_name\" ($status)"
+      any_process=1
+    done <<< "$tmux_out"
+  else
+    echo "  tmux: socket present but no session"
+    any_process=1
+  fi
+fi
+
+# Check for bwrap processes
+bwrap_pids=$(pgrep -u "$USER_NAME" -x bwrap 2>/dev/null || true)
+if [[ -n "$bwrap_pids" ]]; then
+  bwrap_pids_inline=$(echo "$bwrap_pids" | tr '\n' ' ' | sed 's/ $//')
+  bwrap_line="  bwrap: pid $bwrap_pids_inline"
+fi
+
+if [[ -n "$bwrap_line" ]]; then
+  echo "$bwrap_line"
+  any_process=1
+fi
+
+if [[ "$any_process" -eq 0 ]]; then
+  echo "  none"
+fi

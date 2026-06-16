@@ -1,0 +1,59 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: setup-skeleton --user NAME [--skeleton PATH] [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: setup-skeleton --user NAME [--skeleton PATH] [--dry-run]
+
+Copy the shared skeleton directory into a subaccount's home directory
+and fix ownership.
+
+Options:
+  --user NAME       Username whose home directory to populate (required)
+  --skeleton PATH   Skeleton directory to copy from
+                    (default: /home/agents/skel)
+  --dry-run         Print the commands that would run, without
+                    making changes
+EOF
+  exit 0
+}
+
+USER_NAME=""
+SKELETON_DIR="/home/agents/skel"
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --skeleton) SKELETON_DIR="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+
+HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+
+[[ -d "$SKELETON_DIR" ]] || { echo "Error: skeleton dir '$SKELETON_DIR' not found" >&2; exit 1; }
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "+ mkdir -p $HOME_DIR"
+  echo "+ cp -a $SKELETON_DIR/. $HOME_DIR/"
+  echo "+ chown -R $USER_NAME:$USER_NAME $HOME_DIR"
+  exit 0
+fi
+
+mkdir -p "$HOME_DIR"
+cp -a "$SKELETON_DIR/." "$HOME_DIR/"
+chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"

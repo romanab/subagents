@@ -1,0 +1,118 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: modify-subaccount --user NAME [--extra-groups LIST] [--remove-groups LIST] [--comment TEXT] [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: modify-subaccount --user NAME [--extra-groups LIST] [--remove-groups LIST] [--comment TEXT] [--dry-run]
+
+Modify an existing subagent-managed account's group memberships and/or
+comment. Refuses to run unless the account's GECOS field is tagged
+"subagent-managed -", and preserves that prefix.
+
+Options:
+  --user NAME            Username to modify (required)
+  --extra-groups LIST    Comma-separated list of groups to add
+                         (via usermod -aG)
+  --remove-groups LIST   Comma-separated list of groups to remove
+                         (via gpasswd -d)
+  --comment TEXT         Replace the comment portion of GECOS, stored as
+                         "subagent-managed - TEXT"
+  --dry-run              Print the commands that would run, without
+                         making changes
+EOF
+  exit 0
+}
+
+USER_NAME=""
+EXTRA_GROUPS=""
+REMOVE_GROUPS=""
+REMOVE_GROUP_ARR=()
+COMMENT=""
+HAS_COMMENT=0
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --extra-groups) EXTRA_GROUPS="$2"; shift 2 ;;
+    --remove-groups) REMOVE_GROUPS="$2"; shift 2 ;;
+    --comment) COMMENT="$2"; HAS_COMMENT=1; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+
+if [[ -n "$EXTRA_GROUPS" ]]; then
+  IFS=',' read -ra GROUP_ARR <<< "$EXTRA_GROUPS"
+  for g in "${GROUP_ARR[@]}"; do
+    validate_identifier "$g" "group"
+  done
+fi
+
+if [[ -n "$REMOVE_GROUPS" ]]; then
+  IFS=',' read -ra REMOVE_GROUP_ARR <<< "$REMOVE_GROUPS"
+  for g in "${REMOVE_GROUP_ARR[@]}"; do
+    validate_identifier "$g" "group"
+  done
+fi
+
+if [[ "$HAS_COMMENT" == "1" ]]; then
+  validate_comment "$COMMENT"
+fi
+
+GECOS="${SUBAGENTS_TEST_GECOS:-$(getent passwd "$USER_NAME" | cut -d: -f5)}"
+case "$GECOS" in
+  "subagent-managed -"*) ;;
+  *) echo "Error: '$USER_NAME' is not subagent-managed (GECOS: '$GECOS')" >&2; exit 1 ;;
+esac
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  if [[ -n "$EXTRA_GROUPS" ]]; then
+    echo "+ usermod -aG $EXTRA_GROUPS $USER_NAME"
+  fi
+  if [[ -n "$REMOVE_GROUPS" ]]; then
+    for g in "${REMOVE_GROUP_ARR[@]}"; do
+      echo "+ gpasswd -d $USER_NAME $g"
+      echo "WARNING: if /home/agents/shared/$g is bound into the sandbox, the bind is now"
+      echo "stale. To remove it run:"
+      echo "  subagent bwrap-config-set --user $USER_NAME --remove-bind RW_BINDS /home/agents/shared/$g:/home/$USER_NAME/shared/$g"
+      echo "Note: verify the actual mountpoint in /home/$USER_NAME/.subagent/config first."
+      echo "WARNING: $USER_NAME's running session still has $g group access until"
+      echo "  terminated. Revoke immediately with: pkill -u $USER_NAME"
+    done
+  fi
+  if [[ "$HAS_COMMENT" == "1" ]]; then
+    echo "+ usermod -c 'subagent-managed - $COMMENT' $USER_NAME"
+  fi
+  exit 0
+fi
+
+if [[ -n "$EXTRA_GROUPS" ]]; then
+  usermod -aG "$EXTRA_GROUPS" "$USER_NAME"
+fi
+if [[ -n "$REMOVE_GROUPS" ]]; then
+  for g in "${REMOVE_GROUP_ARR[@]}"; do
+    gpasswd -d "$USER_NAME" "$g"
+    echo "WARNING: if /home/agents/shared/$g is bound into the sandbox, the bind is now"
+    echo "stale. To remove it run:"
+    echo "  subagent bwrap-config-set --user $USER_NAME --remove-bind RW_BINDS /home/agents/shared/$g:/home/$USER_NAME/shared/$g"
+    echo "Note: verify the actual mountpoint in /home/$USER_NAME/.subagent/config first."
+    echo "WARNING: $USER_NAME's running session still has $g group access until"
+    echo "  terminated. Revoke immediately with: pkill -u $USER_NAME"
+  done
+fi
+if [[ "$HAS_COMMENT" == "1" ]]; then
+  usermod -c "subagent-managed - $COMMENT" "$USER_NAME"
+fi

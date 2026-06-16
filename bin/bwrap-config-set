@@ -1,0 +1,211 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: bwrap-config-set --user NAME (--set KEY=VALUE | --remove-bind KEY VALUE) [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: bwrap-config-set --user NAME (--set KEY=VALUE | --remove-bind KEY VALUE) [--dry-run]
+
+Update one key in a subaccount's ~/.subagent/config file, then regenerate
+its sandbox launcher via bwrap-config-apply.
+
+Options:
+  --user NAME            Username whose config to update (required)
+  --set KEY=VALUE        Config key to update: NETWORK, RO_BINDS, RW_BINDS, or
+                         EXTRA_RO_BINDS (required). For all keys except NETWORK,
+                         VALUE is appended to the existing value.
+  --remove-bind KEY VALUE
+                         Remove a single space-delimited entry VALUE from the
+                         bind-list key KEY (one of RO_BINDS, RW_BINDS,
+                         EXTRA_RO_BINDS). Exits non-zero if VALUE is not found.
+  --dry-run              Show the proposed config change and launcher diff
+                         without writing
+EOF
+  exit 0
+}
+
+USER_NAME=""
+KEYVAL=""
+REMOVE_KEY=""
+REMOVE_VALUE=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --set) KEYVAL="$2"; shift 2 ;;
+    --remove-bind) REMOVE_KEY="$2"; REMOVE_VALUE="$3"; shift 3 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+# validate_bind_path PATH
+# Exits with status 1 if PATH is not absolute or contains a '..' segment.
+validate_bind_path() {
+  local path="$1"
+  case "$path" in
+    /*) ;;
+    *) echo "Error: bind path '$path' must be an absolute path" >&2; exit 1 ;;
+  esac
+  case "$path" in
+    *..*) echo "Error: bind path '$path' must not contain '..'" >&2; exit 1 ;;
+  esac
+}
+
+# --- --remove-bind path ---
+if [[ -n "$REMOVE_KEY" ]]; then
+  [[ -n "$USER_NAME" ]] || usage
+  validate_identifier "$USER_NAME" "user"
+
+  case "$REMOVE_KEY" in
+    NETWORK) echo "ERROR: NETWORK is a scalar key, not a bind list" >&2; exit 1 ;;
+    RO_BINDS|RW_BINDS|EXTRA_RO_BINDS) ;;
+    *) echo "Error: unknown config key '$REMOVE_KEY'" >&2; exit 1 ;;
+  esac
+
+  # Validate both sides of the hostpath:sandboxpath pair (RW_BINDS uses colon
+  # separation; RO_BINDS/EXTRA_RO_BINDS have no colon, so both expansions
+  # resolve to the same single path, which is fine to validate twice).
+  validate_bind_path "${REMOVE_VALUE%%:*}"   # host path
+  validate_bind_path "${REMOVE_VALUE##*:}"   # sandbox path
+
+  KEY="$REMOVE_KEY"
+  VALUE="$REMOVE_VALUE"
+
+  HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+  CONFIG_FILE="$HOME_DIR/.subagent/config"
+
+  [[ -f "$CONFIG_FILE" ]] || { echo "Error: $CONFIG_FILE not found" >&2; exit 1; }
+
+  OLD_LINE=$(grep -E "^${KEY}=" "$CONFIG_FILE" | tail -n1 || true)
+  OLD_VALUE="${OLD_LINE#*=}"
+
+  read -ra ENTRIES <<< "$OLD_VALUE"
+  NEW_VALUE=""
+  FOUND=0
+  for entry in "${ENTRIES[@]}"; do
+    if [[ "$entry" == "$VALUE" ]]; then FOUND=1; continue; fi
+    NEW_VALUE="${NEW_VALUE:+$NEW_VALUE }$entry"
+  done
+  [[ "$FOUND" -eq 1 ]] || { echo "ERROR: '$VALUE' not found in $KEY" >&2; exit 1; }
+
+  NEW_LINE="${KEY}=${NEW_VALUE}"
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "--- $CONFIG_FILE ---"
+    echo "- ${OLD_LINE:-$KEY=}"
+    echo "+ $NEW_LINE"
+    "$SCRIPT_DIR/bwrap-config-apply" --user "$USER_NAME" --dry-run
+    exit 0
+  fi
+
+  TMP_FILE=$(mktemp)
+  WRITTEN=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "${KEY}="* ]]; then
+      printf '%s\n' "$NEW_LINE" >> "$TMP_FILE"
+      WRITTEN=1
+    else
+      printf '%s\n' "$line" >> "$TMP_FILE"
+    fi
+  done < "$CONFIG_FILE"
+  if [[ "$WRITTEN" == "0" ]]; then
+    printf '%s\n' "$NEW_LINE" >> "$TMP_FILE"
+  fi
+  chmod 640 "$TMP_FILE"
+  mv "$TMP_FILE" "$CONFIG_FILE"
+
+  "$SCRIPT_DIR/bwrap-config-apply" --user "$USER_NAME"
+  exit 0
+fi
+
+# --- --set path ---
+[[ -n "$USER_NAME" && -n "$KEYVAL" && "$KEYVAL" == *=* ]] || usage
+validate_identifier "$USER_NAME" "user"
+
+KEY="${KEYVAL%%=*}"
+VALUE="${KEYVAL#*=}"
+
+case "$KEY" in
+  NETWORK|RO_BINDS|RW_BINDS|EXTRA_RO_BINDS) ;;
+  *) echo "Error: unknown config key '$KEY'" >&2; exit 1 ;;
+esac
+
+[[ "$VALUE" != *$'\n'* ]] || { echo "Error: value cannot contain a newline" >&2; exit 1; }
+
+case "$KEY" in
+  NETWORK)
+    case "$VALUE" in
+      full|loopback|none) ;;
+      *) echo "Error: NETWORK must be 'full', 'loopback', or 'none'" >&2; exit 1 ;;
+    esac
+    ;;
+  RO_BINDS|EXTRA_RO_BINDS)
+    set -f
+    for tok in $VALUE; do
+      validate_bind_path "$tok"
+    done
+    set +f
+    ;;
+  RW_BINDS)
+    set -f
+    for tok in $VALUE; do
+      validate_bind_path "${tok%%:*}"
+      validate_bind_path "${tok##*:}"
+    done
+    set +f
+    ;;
+esac
+
+HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+CONFIG_FILE="$HOME_DIR/.subagent/config"
+
+[[ -f "$CONFIG_FILE" ]] || { echo "Error: $CONFIG_FILE not found" >&2; exit 1; }
+
+OLD_LINE=$(grep -E "^${KEY}=" "$CONFIG_FILE" | tail -n1 || true)
+OLD_VALUE="${OLD_LINE#*=}"
+
+if [[ "$KEY" == "NETWORK" ]]; then
+  NEW_VALUE="$VALUE"
+elif [[ -z "$OLD_VALUE" ]]; then
+  NEW_VALUE="$VALUE"
+else
+  NEW_VALUE="$OLD_VALUE $VALUE"
+fi
+
+NEW_LINE="${KEY}=${NEW_VALUE}"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "--- $CONFIG_FILE ---"
+  echo "- ${OLD_LINE:-$KEY=}"
+  echo "+ $NEW_LINE"
+  "$SCRIPT_DIR/bwrap-config-apply" --user "$USER_NAME" --dry-run
+  exit 0
+fi
+
+TMP_FILE=$(mktemp)
+FOUND=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  if [[ "$line" == "${KEY}="* ]]; then
+    printf '%s\n' "$NEW_LINE" >> "$TMP_FILE"
+    FOUND=1
+  else
+    printf '%s\n' "$line" >> "$TMP_FILE"
+  fi
+done < "$CONFIG_FILE"
+if [[ "$FOUND" == "0" ]]; then
+  printf '%s\n' "$NEW_LINE" >> "$TMP_FILE"
+fi
+chmod 640 "$TMP_FILE"
+mv "$TMP_FILE" "$CONFIG_FILE"
+
+"$SCRIPT_DIR/bwrap-config-apply" --user "$USER_NAME"

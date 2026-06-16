@@ -1,0 +1,133 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: create-subaccount --user NAME [--profile NAME] [--extra-groups LIST] [--comment TEXT] [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: create-subaccount --user NAME [--profile NAME] [--extra-groups LIST] [--comment TEXT] [--dry-run]
+
+Create a new subagent-managed Linux user account with a paired UID/GID,
+home directory, bwrap sandbox config, and shared skeleton files.
+
+Options:
+  --user NAME           Username to create (required)
+  --profile NAME        Sandbox profile to apply (default: default)
+  --extra-groups LIST   Comma-separated list of additional groups
+  --comment TEXT        Free-text comment, stored in GECOS as
+                        "subagent-managed - TEXT"
+  --dry-run             Print the commands that would run, without
+                        making changes
+EOF
+  exit 0
+}
+
+USER_NAME=""
+PROFILE="default"
+EXTRA_GROUPS=""
+COMMENT=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --profile) PROFILE="$2"; shift 2 ;;
+    --extra-groups) EXTRA_GROUPS="$2"; shift 2 ;;
+    --comment) COMMENT="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+validate_identifier "$PROFILE" "profile"
+
+if [[ -n "$EXTRA_GROUPS" ]]; then
+  IFS=',' read -ra GROUP_ARR <<< "$EXTRA_GROUPS"
+  for g in "${GROUP_ARR[@]}"; do
+    validate_identifier "$g" "group"
+  done
+fi
+
+validate_comment "$COMMENT"
+
+GECOS="subagent-managed - $COMMENT"
+PROFILE_FILE="/home/agents/profiles/$PROFILE.profile"
+HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  ID=$("$SCRIPT_DIR/find-free-subagent-id")
+  echo "+ groupadd -g $ID $USER_NAME"
+  printf "+ useradd -m -u %s -g %s -s /home/agents/bin/subagent-shell -c '%s'" "$ID" "$ID" "$GECOS"
+  if [[ -n "$EXTRA_GROUPS" ]]; then
+    printf ' -G %s' "$EXTRA_GROUPS"
+  fi
+  printf ' %s\n' "$USER_NAME"
+  echo "+ $SCRIPT_DIR/setup-skeleton --user $USER_NAME"
+  echo "+ chmod +t $HOME_DIR"
+  echo "+ mkdir -p $HOME_DIR/.subagent"
+  echo "+ cp $PROFILE_FILE $HOME_DIR/.subagent/config"
+  echo "+ chown agents:agents $HOME_DIR/.subagent/config"
+  echo "+ chmod 640 $HOME_DIR/.subagent/config"
+  echo "+ $SCRIPT_DIR/bwrap-config-apply --user $USER_NAME"
+  exit 0
+fi
+
+[[ -f "$PROFILE_FILE" ]] || { echo "Error: profile '$PROFILE' not found at $PROFILE_FILE" >&2; exit 1; }
+
+# Clean up any partial state (group or user created) if a later step fails.
+_cleanup() {
+  if getent passwd "$USER_NAME" &>/dev/null; then
+    userdel -r "$USER_NAME" 2>/dev/null || true
+  fi
+  if getent group "$USER_NAME" &>/dev/null; then
+    groupdel "$USER_NAME" 2>/dev/null || true
+  fi
+}
+trap _cleanup ERR
+
+# Hold a lock for the duration of ID allocation + groupadd + useradd so that
+# two concurrent create-subaccount runs cannot receive the same free ID.
+LOCK_FILE="${SUBAGENTS_TEST_LOCK:-/var/lock/subagents-id-alloc.lock}"
+exec 200>"$LOCK_FILE"
+flock -x 200
+ID=$("$SCRIPT_DIR/find-free-subagent-id")
+
+USERADD_CMD=(useradd -m -u "$ID" -g "$ID" -s /home/agents/bin/subagent-shell -c "$GECOS")
+if [[ -n "$EXTRA_GROUPS" ]]; then
+  USERADD_CMD+=(-G "$EXTRA_GROUPS")
+fi
+USERADD_CMD+=("$USER_NAME")
+
+groupadd -g "$ID" "$USER_NAME"
+"${USERADD_CMD[@]}"
+
+# Release the lock — unique ID is now committed to the system.
+flock -u 200
+
+# setup-skeleton runs first because it chowns the home directory recursively
+# to the new user; .subagent/config and .subagent/launcher must be created
+# (and chowned to agents:agents) afterwards so that chown doesn't hand the
+# sandbox config back to the subaccount.
+"$SCRIPT_DIR/setup-skeleton" --user "$USER_NAME"
+
+# The sticky bit prevents the subaccount from deleting or renaming the
+# root-owned .subagent/ directory, which would otherwise let them replace the
+# launcher and escape the bwrap sandbox.
+chmod +t "$HOME_DIR"
+
+mkdir -p "$HOME_DIR/.subagent"
+cp "$PROFILE_FILE" "$HOME_DIR/.subagent/config"
+chown agents:agents "$HOME_DIR/.subagent/config"
+chmod 640 "$HOME_DIR/.subagent/config"
+
+"$SCRIPT_DIR/bwrap-config-apply" --user "$USER_NAME"
+trap - ERR

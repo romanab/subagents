@@ -1,0 +1,72 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: delete-subaccount --user NAME [--do-not-backup-home-dir] [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: delete-subaccount --user NAME [--do-not-backup-home-dir] [--dry-run]
+
+Delete a subagent-managed Linux user account. Refuses to run unless the
+account's GECOS field is tagged "subagent-managed -". By default, backs up
+the home directory (via backup-subaccount) before deleting it.
+
+Options:
+  --user NAME                Username to delete (required)
+  --do-not-backup-home-dir   Skip backing up the home directory before
+                              deleting
+  --dry-run                  Print the commands that would run, without
+                              making changes
+EOF
+  exit 0
+}
+
+USER_NAME=""
+BACKUP_HOME=1
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --do-not-backup-home-dir) BACKUP_HOME=0; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+
+GECOS="${SUBAGENTS_TEST_GECOS:-$(getent passwd "$USER_NAME" | cut -d: -f5)}"
+case "$GECOS" in
+  "subagent-managed -"*) ;;
+  *) echo "Error: '$USER_NAME' is not subagent-managed (GECOS: '$GECOS')" >&2; exit 1 ;;
+esac
+
+USERDEL_CMD=(userdel -r "$USER_NAME")
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "+ pkill -u $USER_NAME"
+  echo "+ sleep 1"
+  echo "+ pkill -KILL -u $USER_NAME"
+  if [[ "$BACKUP_HOME" == "1" ]]; then
+    echo "+ $SCRIPT_DIR/backup-subaccount --user $USER_NAME"
+  fi
+  printf '+'; printf ' %q' "${USERDEL_CMD[@]}"; printf '\n'
+  exit 0
+fi
+
+pkill -u "$USER_NAME" || true
+sleep 1
+pkill -KILL -u "$USER_NAME" || true
+if [[ "$BACKUP_HOME" == "1" ]]; then
+  "$SCRIPT_DIR/backup-subaccount" --user "$USER_NAME"
+fi
+"${USERDEL_CMD[@]}"

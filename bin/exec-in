@@ -1,0 +1,91 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+readonly GECOS_TAG="subagent-managed -"
+
+usage() {
+  echo "Usage: exec-in --user <name> [--sandbox] [--dry-run] [--help] [--] <command> [args...]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: exec-in --user <name> [--sandbox] [--dry-run] [--help] [--] <command> [args...]
+
+Run a command as a subaccount user, optionally inside the bwrap sandbox.
+
+Options:
+  --user NAME    Username to run command as (required)
+  --sandbox      Run command inside the subaccount's bwrap sandbox
+  --dry-run      Print the command that would be run without executing it
+  -h, --help     Show this help and exit 0
+
+Arguments:
+  command [args...]  The command (and optional args) to execute.
+                     Use -- to separate flags from the command if needed.
+EOF
+  exit 0
+}
+
+USER_NAME=""
+SANDBOX=0
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --sandbox) SANDBOX=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    --) shift; break ;;
+    -*) echo "Error: unknown option '$1'" >&2; usage ;;
+    *) break ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || { echo "Error: --user is required" >&2; usage; }
+validate_identifier "$USER_NAME" "user"
+
+[[ $# -gt 0 ]] || { echo "Error: a command to run is required" >&2; usage; }
+
+CMD="$1"
+shift
+ARGS=("$@")
+
+# Verify the account exists
+passwd_entry=$(getent passwd "$USER_NAME" 2>/dev/null) || {
+  echo "Error: user '$USER_NAME' not found" >&2
+  exit 1
+}
+
+# Parse GECOS field
+IFS=: read -r _name _pw _uid _gid gecos _home _shell <<< "$passwd_entry"
+
+# Verify GECOS tag
+if [[ "$gecos" != "$GECOS_TAG"* ]]; then
+  echo "Error: user '$USER_NAME' is not a subagent-managed account (GECOS: '$gecos')" >&2
+  exit 1
+fi
+
+if [[ "$SANDBOX" -eq 1 ]]; then
+  HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+  LAUNCHER="$HOME_DIR/.subagent/launcher"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ sudo -u $USER_NAME $LAUNCHER $CMD${ARGS[*]:+ ${ARGS[*]}}"
+  else
+    if [[ ! -f "$LAUNCHER" ]]; then
+      echo "Error: launcher not found for '$USER_NAME'. Has bwrap-config-apply been run?" >&2
+      exit 1
+    fi
+    exec sudo -u "$USER_NAME" "$LAUNCHER" "$CMD" "${ARGS[@]}"
+  fi
+else
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ sudo -u $USER_NAME $CMD${ARGS[*]:+ ${ARGS[*]}}"
+  else
+    exec sudo -u "$USER_NAME" "$CMD" "${ARGS[@]}"
+  fi
+fi

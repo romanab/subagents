@@ -1,0 +1,11 @@
+#!/bin/bash
+# Shared, static login shell for every subaccount (root:root, 755).
+# Never regenerated — per-subaccount sandbox config lives in
+# ~/.subagent/launcher, which bwrap-config-apply rebuilds from scratch.
+#
+# tmux runs the given shell-command via its "default-shell" option, which
+# defaults to $SHELL -- but $SHELL for a subaccount *is* this script, so
+# without the override tmux would re-exec subagent-shell (ignoring the
+# command) and recurse into attaching to the session it's still creating,
+# exiting immediately. Force a real shell for that one step.
+exec env SHELL=/bin/bash tmux new-session -A -s main "$HOME/.subagent/launcher"

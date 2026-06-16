@@ -1,0 +1,17 @@
+#!/bin/bash
+# Prints the lowest UID/GID in 50000-59999 not already in use as a UID or GID.
+# Exits 1 with an error on stderr if the entire range is in use.
+set -euo pipefail
+
+RANGE_MIN=50000
+RANGE_MAX=59999
+
+for ((id = RANGE_MIN; id <= RANGE_MAX; id++)); do
+  if ! getent passwd "$id" >/dev/null && ! getent group "$id" >/dev/null; then
+    echo "$id"
+    exit 0
+  fi
+done
+
+echo "Error: no free UID/GID in range $RANGE_MIN-$RANGE_MAX" >&2
+exit 1

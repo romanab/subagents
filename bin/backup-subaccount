@@ -1,0 +1,62 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: backup-subaccount --user NAME [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: backup-subaccount --user NAME [--dry-run]
+
+Create a tar.gz archive of a subaccount's home directory and store it in
+the agents account's backup directory (/home/agents/backups), owned by
+agents:agents.
+
+Options:
+  --user NAME   Username whose home directory to back up (required)
+  --dry-run     Print the commands that would run, without
+                making changes
+EOF
+  exit 0
+}
+
+USER_NAME=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+
+HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+BACKUP_DIR="${SUBAGENTS_TEST_BACKUP_DIR:-/home/agents/backups}"
+TIMESTAMP="${SUBAGENTS_TEST_TIMESTAMP:-$(date +%Y%m%d%H%M%S)}"
+BACKUP_FILE="$BACKUP_DIR/$USER_NAME-$TIMESTAMP.tar.gz"
+HOME_PARENT_DIR=$(dirname "$HOME_DIR")
+HOME_BASENAME=$(basename "$HOME_DIR")
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "+ mkdir -p $BACKUP_DIR"
+  echo "+ tar -czf $BACKUP_FILE -C $HOME_PARENT_DIR $HOME_BASENAME"
+  echo "+ chown agents:agents $BACKUP_FILE"
+  exit 0
+fi
+
+[[ -d "$HOME_DIR" ]] || { echo "Error: home directory '$HOME_DIR' not found" >&2; exit 1; }
+
+mkdir -p "$BACKUP_DIR"
+tar -czf "$BACKUP_FILE" -C "$HOME_PARENT_DIR" "$HOME_BASENAME"
+chown agents:agents "$BACKUP_FILE"
+echo "Backed up $HOME_DIR to $BACKUP_FILE"

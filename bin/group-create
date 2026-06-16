@@ -1,0 +1,62 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: group-create --group NAME [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: group-create --group NAME [--dry-run]
+
+Create a shared collaboration group with a GID from the reserved
+subagent range (50000-59999), plus a group-writable shared directory
+at /home/agents/shared/NAME.
+
+Options:
+  --group NAME   Group name to create (required)
+  --dry-run      Print the commands that would run, without
+                 making changes
+EOF
+  exit 0
+}
+
+GROUP_NAME=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --group) GROUP_NAME="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$GROUP_NAME" ]] || usage
+validate_identifier "$GROUP_NAME" "group"
+
+SHARED_DIR="/home/agents/shared/$GROUP_NAME"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  ID=$("$SCRIPT_DIR/find-free-subagent-id")
+  echo "+ groupadd -g $ID $GROUP_NAME"
+  echo "+ mkdir -p $SHARED_DIR"
+  echo "+ chgrp $GROUP_NAME $SHARED_DIR"
+  echo "+ chmod 2770 $SHARED_DIR"
+  exit 0
+fi
+
+LOCK_FILE="${SUBAGENTS_TEST_LOCK:-/var/lock/subagents-id-alloc.lock}"
+exec 200>"$LOCK_FILE"
+flock -x 200
+ID=$("$SCRIPT_DIR/find-free-subagent-id")
+groupadd -g "$ID" "$GROUP_NAME"
+flock -u 200
+mkdir -p "$SHARED_DIR"
+chgrp "$GROUP_NAME" "$SHARED_DIR"
+chmod 2770 "$SHARED_DIR"
