@@ -15,6 +15,7 @@ ALL_SCRIPTS=(
   setup-skeleton
   backup-subaccount
   bwrap-config-apply
+  bwrap-config-reset
   bwrap-config-set
   group-create
   group-delete
@@ -81,7 +82,7 @@ SCRIPT="$1"
 shift
 
 case "$SCRIPT" in
-  create-subaccount|delete-subaccount|modify-subaccount|bwrap-config-apply|bwrap-config-set|group-create|group-delete|exec-in)
+  create-subaccount|delete-subaccount|modify-subaccount|bwrap-config-apply|bwrap-config-reset|bwrap-config-set|group-create|group-delete|exec-in)
     if [[ -n "$SUDO_CMD" ]]; then
       exec "$SUDO_CMD" "$SCRIPT_DIR/$SCRIPT" "$@"
     else

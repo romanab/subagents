@@ -1,5 +1,6 @@
 agents ALL=(root) NOPASSWD: /home/agents/bin/create-subaccount, \
   /home/agents/bin/delete-subaccount, /home/agents/bin/modify-subaccount, \
-  /home/agents/bin/bwrap-config-apply, /home/agents/bin/bwrap-config-set, \
+  /home/agents/bin/bwrap-config-apply, /home/agents/bin/bwrap-config-reset, \
+  /home/agents/bin/bwrap-config-set, \
   /home/agents/bin/group-create, /home/agents/bin/group-delete, \
   /home/agents/bin/exec-in

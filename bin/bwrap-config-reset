@@ -1,0 +1,76 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
+usage() {
+  echo "Usage: bwrap-config-reset --user NAME [--profile NAME] [--dry-run]" >&2
+  exit 1
+}
+
+print_help() {
+  cat <<'EOF'
+Usage: bwrap-config-reset --user NAME [--profile NAME] [--dry-run]
+
+Replace a subaccount's ~/.subagent/config with a fresh copy of a profile,
+then regenerate its sandbox launcher via bwrap-config-apply. Any per-account
+customisations made via bwrap-config-set are discarded.
+
+Options:
+  --user NAME      Username whose config to reset (required)
+  --profile NAME   Profile to apply (default: default)
+  --dry-run        Show what would change without writing anything
+EOF
+  exit 0
+}
+
+USER_NAME=""
+PROFILE="default"
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user) USER_NAME="$2"; shift 2 ;;
+    --profile) PROFILE="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) print_help ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$USER_NAME" ]] || usage
+validate_identifier "$USER_NAME" "user"
+validate_identifier "$PROFILE" "profile"
+
+GECOS="${SUBAGENTS_TEST_GECOS:-$(getent passwd "$USER_NAME" | cut -d: -f5)}"
+case "$GECOS" in
+  "subagent-managed -"*) ;;
+  *) echo "Error: '$USER_NAME' is not subagent-managed (GECOS: '$GECOS')" >&2; exit 1 ;;
+esac
+
+PROFILE_FILE="/home/agents/profiles/$PROFILE.profile"
+[[ -f "$PROFILE_FILE" ]] || { echo "Error: profile '$PROFILE' not found at $PROFILE_FILE" >&2; exit 1; }
+
+HOME_DIR="${SUBAGENTS_TEST_HOME:-/home/$USER_NAME}"
+CONFIG_FILE="$HOME_DIR/.subagent/config"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "--- $CONFIG_FILE (current) ---"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    cat "$CONFIG_FILE"
+  else
+    echo "(does not exist)"
+  fi
+  echo "--- $CONFIG_FILE (new: $PROFILE.profile) ---"
+  cat "$PROFILE_FILE"
+  "$SCRIPT_DIR/bwrap-config-apply" --user "$USER_NAME" --dry-run
+  exit 0
+fi
+
+mkdir -p "$HOME_DIR/.subagent"
+cp "$PROFILE_FILE" "$CONFIG_FILE"
+chown agents:agents "$CONFIG_FILE"
+chmod 640 "$CONFIG_FILE"
+
+"$SCRIPT_DIR/bwrap-config-apply" --user "$USER_NAME"
