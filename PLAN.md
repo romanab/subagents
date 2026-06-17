@@ -163,6 +163,11 @@ NETWORK=full
 RO_BINDS=/usr /lib /lib64 /bin /sbin /etc/alternatives /etc/resolv.conf /etc/ssl /etc/ca-certificates /etc/passwd /etc/group
 RW_BINDS=
 EXTRA_RO_BINDS=
+DEV_BINDS=
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=
+ENV_SET=
+ENV_UNSET=
 ```
 
 - `NETWORK`: `full` (no `--unshare-net`) / `loopback` / `none`. `loopback` and `none`
@@ -182,9 +187,23 @@ EXTRA_RO_BINDS=
   `group-delete`, leaving a stale `RW_BINDS` entry.
 - `EXTRA_RO_BINDS`: same syntax as `RO_BINDS`, for ad-hoc additions via
   `bwrap-config-set` without editing the base list.
+- `DEV_BINDS`: space-separated host paths, each mounted `--dev-bind-try <path> <path>`.
+  Like `RO_BINDS` but with device-file access (needed for GPU/DRI/sound devices).
+- `EXTRA_RW_BINDS`: same syntax as `RW_BINDS` (colon-separated `hostpath:sandboxpath`
+  pairs), for per-subaccount rw-bind additions without clobbering the profile's `RW_BINDS`.
+- `TMPFS_MOUNTS`: space-separated paths, each mounted `--tmpfs <path>`. Used for
+  additional volatile mounts beyond the hardcoded `/tmp` (e.g. `/run`, `/var/run`).
+- `ENV_SET`: space-separated `NAME=VALUE` pairs, each emitted as `--setenv NAME VALUE`.
+  Values may not contain spaces (space is the list delimiter). Useful for forcing `HOME`,
+  `TMPDIR`, locale variables, etc. inside the sandbox.
+- `ENV_UNSET`: space-separated environment variable names, each emitted as
+  `--unsetenv NAME`. Strips leaking host variables (e.g. `DBUS_SESSION_BUS_ADDRESS`).
+  Names must match `[A-Za-z_][A-Za-z0-9_]*`.
 
-`bwrap-config-set` requires every `RO_BINDS`/`RW_BINDS`/`EXTRA_RO_BINDS` path (both sides
-of a `RW_BINDS` pair) to be absolute and free of `..` segments. `bwrap-config-apply`
+`bwrap-config-set` requires every bind/mount path (both sides of a colon pair for
+`RW_BINDS`/`EXTRA_RW_BINDS`) to be absolute and free of `..` segments. `ENV_SET` and
+`ENV_UNSET` values are validated as legal environment variable names instead.
+`bwrap-config-apply`
 iterates these space-separated lists with `set -f` (noglob) so a value containing `*`,
 `?`, or `[...]` is passed through to `bwrap` literally rather than being glob-expanded
 against the filesystem at apply-time.
@@ -201,6 +220,11 @@ exec bwrap \
   [--ro-bind-try <path> <path> ...]    # RO_BINDS \
   [--bind-try <host> <sandbox> ...]    # RW_BINDS \
   [--ro-bind-try <path> <path> ...]    # EXTRA_RO_BINDS \
+  [--dev-bind-try <path> <path> ...]   # DEV_BINDS \
+  [--bind-try <host> <sandbox> ...]    # EXTRA_RW_BINDS \
+  [--tmpfs <path> ...]                 # TMPFS_MOUNTS \
+  [--setenv NAME VALUE ...]            # ENV_SET \
+  [--unsetenv NAME ...]                # ENV_UNSET \
   -- /bin/bash -l
 ```
 
@@ -254,7 +278,7 @@ group — standard `groupdel` behavior) and removes `/home/agents/shared/devs`.
 | `modify-subaccount --user NAME [--extra-groups LIST] [--remove-groups LIST] [--comment TEXT] [--dry-run]` | Thin `usermod`/`gpasswd` wrapper; preserves the `subagent-managed -` GECOS prefix. `--remove-groups` calls `gpasswd -d` per group and prints two warnings: one about the stale bind mount in the config, and one that the **running session still has group access** until terminated — with a `pkill -u` command to revoke immediately. |
 | `bwrap-config-apply --user NAME` | Internal. Reads `.subagent/config`, regenerates `.subagent/launcher` from scratch. The generated launcher accepts an optional command via `$@`; when called with no args it starts `/bin/bash` (normal session); when called with args it passes them to bwrap as the init command (used by `exec-in --sandbox`). |
 | `find-free-subagent-id` | Internal. Prints the lowest unused UID/GID in 50000-59999 (checking both `getent passwd` and `getent group`), or exits 1 if the range is exhausted. Called by `create-subaccount` and `group-create` while holding the allocation lock. |
-| `bwrap-config-set --user NAME (--set KEY=VALUE \| --remove-bind KEY VALUE) [--dry-run]` | Edits one key in `.subagent/config`, then calls `bwrap-config-apply`. The tighten/loosen entry point. `--remove-bind` removes a single space-delimited entry from a bind-list key (RW_BINDS, RO_BINDS, EXTRA_RO_BINDS). For `--set`, validates that NETWORK is one of `full`, `loopback`, or `none`; bind paths must be absolute and free of `..`. |
+| `bwrap-config-set --user NAME (--set KEY=VALUE \| --remove-bind KEY VALUE) [--dry-run]` | Edits one key in `.subagent/config`, then calls `bwrap-config-apply`. The tighten/loosen entry point. `--remove-bind` removes a single space-delimited entry from any list key (RO_BINDS, RW_BINDS, EXTRA_RO_BINDS, DEV_BINDS, EXTRA_RW_BINDS, TMPFS_MOUNTS, ENV_SET, ENV_UNSET). For `--set`, validates that NETWORK is one of `full`, `loopback`, or `none`; bind/mount paths must be absolute and free of `..`; ENV_SET/ENV_UNSET names must match `[A-Za-z_][A-Za-z0-9_]*`. |
 | `setup-skeleton --user NAME [--skeleton PATH]` | Internal (called by `create-subaccount`). Copies `/home/agents/skel/` (or `--skeleton` dir) into `/home/<user>`, `chown -R` to the subuser. |
 | `backup-subaccount --user NAME [--dry-run]` | Internal (called by `delete-subaccount`). `tar -czf`s the subaccount's home directory into `/home/agents/backups/<user>-<timestamp>.tar.gz`, owned by `agents:agents`. |
 | `group-create --group NAME [--dry-run]` | `groupadd`, creates and permissions `/home/agents/shared/<group>`. |

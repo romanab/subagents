@@ -52,6 +52,11 @@ NETWORK=$(read_config NETWORK)
 RO_BINDS=$(read_config RO_BINDS)
 RW_BINDS=$(read_config RW_BINDS)
 EXTRA_RO_BINDS=$(read_config EXTRA_RO_BINDS)
+DEV_BINDS=$(read_config DEV_BINDS)
+EXTRA_RW_BINDS=$(read_config EXTRA_RW_BINDS)
+TMPFS_MOUNTS=$(read_config TMPFS_MOUNTS)
+ENV_SET=$(read_config ENV_SET)
+ENV_UNSET=$(read_config ENV_UNSET)
 
 generate_launcher() {
   echo '#!/bin/bash'
@@ -78,6 +83,31 @@ generate_launcher() {
 
   for path in $EXTRA_RO_BINDS; do
     printf '  --ro-bind-try %q %q\n' "$path" "$path"
+  done
+
+  for path in $DEV_BINDS; do
+    printf '  --dev-bind-try %q %q\n' "$path" "$path"
+  done
+
+  for pair in $EXTRA_RW_BINDS; do
+    host="${pair%%:*}"
+    sandbox="${pair##*:}"
+    printf '  --bind-try %q %q\n' "$host" "$sandbox"
+  done
+
+  for path in $TMPFS_MOUNTS; do
+    printf '  --tmpfs %q\n' "$path"
+  done
+
+  local env_key env_val
+  for pair in $ENV_SET; do
+    env_key="${pair%%=*}"
+    env_val="${pair#*=}"
+    printf '  --setenv %q %q\n' "$env_key" "$env_val"
+  done
+
+  for name in $ENV_UNSET; do
+    printf '  --unsetenv %q\n' "$name"
   done
   set +f
 

@@ -186,6 +186,216 @@ test_set_rejects_invalid_network_value() {
   rm -rf "$tmp"
 }
 
+test_set_appends_dev_binds() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set DEV_BINDS=/dev/dri --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q '+ DEV_BINDS=/dev/dri'; then
+    echo "FAIL: expected DEV_BINDS=/dev/dri in config diff"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_set_rejects_relative_path_in_dev_binds() {
+  local tmp
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  if SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set DEV_BINDS=dev/dri --dry-run 2>/dev/null; then
+    rm -rf "$tmp"
+    echo "FAIL: should reject relative path in DEV_BINDS"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+test_set_appends_extra_rw_binds() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set EXTRA_RW_BINDS=/host/x:/sandbox/x --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q '+ EXTRA_RW_BINDS=/host/x:/sandbox/x'; then
+    echo "FAIL: expected EXTRA_RW_BINDS=/host/x:/sandbox/x in config diff"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_set_rejects_relative_path_in_extra_rw_binds() {
+  local tmp
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  if SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set EXTRA_RW_BINDS=/host/x:relative --dry-run 2>/dev/null; then
+    rm -rf "$tmp"
+    echo "FAIL: should reject relative sandbox path in EXTRA_RW_BINDS"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+test_set_appends_tmpfs_mounts() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set TMPFS_MOUNTS=/run --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q '+ TMPFS_MOUNTS=/run'; then
+    echo "FAIL: expected TMPFS_MOUNTS=/run in config diff"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_set_rejects_relative_path_in_tmpfs_mounts() {
+  local tmp
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  if SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set TMPFS_MOUNTS=run --dry-run 2>/dev/null; then
+    rm -rf "$tmp"
+    echo "FAIL: should reject relative path in TMPFS_MOUNTS"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+test_set_appends_env_set() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set 'ENV_SET=MYVAR=/some/value' --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q '+ ENV_SET=MYVAR=/some/value'; then
+    echo "FAIL: expected ENV_SET=MYVAR=/some/value in config diff"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_set_rejects_invalid_env_name_in_env_set() {
+  local tmp
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  if SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set 'ENV_SET=1BADNAME=value' --dry-run 2>/dev/null; then
+    rm -rf "$tmp"
+    echo "FAIL: should reject env var name starting with digit in ENV_SET"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+test_set_appends_env_unset() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set ENV_UNSET=DISPLAY --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q '+ ENV_UNSET=DISPLAY'; then
+    echo "FAIL: expected ENV_UNSET=DISPLAY in config diff"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_set_rejects_invalid_env_name_in_env_unset() {
+  local tmp
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  write_config "$tmp/.subagent/config"
+
+  if SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --set 'ENV_UNSET=BAD-NAME' --dry-run 2>/dev/null; then
+    rm -rf "$tmp"
+    echo "FAIL: should reject env var name containing hyphen in ENV_UNSET"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+test_remove_bind_removes_entry_from_dev_binds() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=/dev/dri /dev/nvidia0
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=
+ENV_SET=
+ENV_UNSET=
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --remove-bind DEV_BINDS /dev/dri --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q '+ DEV_BINDS=/dev/nvidia0'; then
+    echo "FAIL: expected config diff to show /dev/nvidia0 remaining"
+    echo "$out"
+    return 1
+  fi
+  if ! echo "$out" | grep -qF -- '- DEV_BINDS=/dev/dri /dev/nvidia0'; then
+    echo "FAIL: expected config diff to show /dev/dri being removed"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_remove_bind_removes_entry_from_env_unset() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=
+ENV_SET=
+ENV_UNSET=DISPLAY DBUS_SESSION_BUS_ADDRESS
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-set" --user alice --remove-bind ENV_UNSET DISPLAY --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q '+ ENV_UNSET=DBUS_SESSION_BUS_ADDRESS'; then
+    echo "FAIL: expected DBUS_SESSION_BUS_ADDRESS remaining after removing DISPLAY"
+    echo "$out"
+    return 1
+  fi
+  if echo "$out" | grep -qF '+ ENV_UNSET=DISPLAY'; then
+    echo "FAIL: DISPLAY should have been removed"
+    echo "$out"
+    return 1
+  fi
+}
+
 test_set_config_has_640_permissions_after_write() {
   local tmp mode
   tmp=$(mktemp -d)

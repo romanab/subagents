@@ -169,3 +169,175 @@ EOF
     return 1
   fi
 }
+
+test_apply_dev_binds_generates_dev_bind_try() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=/dev/dri /dev/nvidia0
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=
+ENV_SET=
+ENV_UNSET=
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q -- '--dev-bind-try /dev/dri /dev/dri'; then
+    echo "FAIL: expected --dev-bind-try /dev/dri /dev/dri"
+    echo "$out"
+    return 1
+  fi
+  if ! echo "$out" | grep -q -- '--dev-bind-try /dev/nvidia0 /dev/nvidia0'; then
+    echo "FAIL: expected --dev-bind-try /dev/nvidia0 /dev/nvidia0"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_apply_extra_rw_binds_generates_bind_try() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=
+EXTRA_RW_BINDS=/host/a:/sandbox/a
+TMPFS_MOUNTS=
+ENV_SET=
+ENV_UNSET=
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q -- '--bind-try /host/a /sandbox/a'; then
+    echo "FAIL: expected --bind-try /host/a /sandbox/a from EXTRA_RW_BINDS"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_apply_tmpfs_mounts_generates_tmpfs() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=/run /var/run
+ENV_SET=
+ENV_UNSET=
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q -- '--tmpfs /run'; then
+    echo "FAIL: expected --tmpfs /run"
+    echo "$out"
+    return 1
+  fi
+  if ! echo "$out" | grep -q -- '--tmpfs /var/run'; then
+    echo "FAIL: expected --tmpfs /var/run"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_apply_env_set_generates_setenv() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=
+ENV_SET=HOME=/sandbox TMPDIR=/tmp/sb
+ENV_UNSET=
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q -- '--setenv HOME /sandbox'; then
+    echo "FAIL: expected --setenv HOME /sandbox"
+    echo "$out"
+    return 1
+  fi
+  if ! echo "$out" | grep -q -- '--setenv TMPDIR /tmp/sb'; then
+    echo "FAIL: expected --setenv TMPDIR /tmp/sb"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_apply_env_unset_generates_unsetenv() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=
+ENV_SET=
+ENV_UNSET=DBUS_SESSION_BUS_ADDRESS DISPLAY
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  if ! echo "$out" | grep -q -- '--unsetenv DBUS_SESSION_BUS_ADDRESS'; then
+    echo "FAIL: expected --unsetenv DBUS_SESSION_BUS_ADDRESS"
+    echo "$out"
+    return 1
+  fi
+  if ! echo "$out" | grep -q -- '--unsetenv DISPLAY'; then
+    echo "FAIL: expected --unsetenv DISPLAY"
+    echo "$out"
+    return 1
+  fi
+}
+
+test_apply_empty_new_keys_generate_nothing() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cat > "$tmp/.subagent/config" <<'EOF'
+NETWORK=full
+RO_BINDS=/usr
+RW_BINDS=
+EXTRA_RO_BINDS=
+DEV_BINDS=
+EXTRA_RW_BINDS=
+TMPFS_MOUNTS=
+ENV_SET=
+ENV_UNSET=
+EOF
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  for flag in '--dev-bind-try' '--tmpfs /run' '--setenv' '--unsetenv'; do
+    if echo "$out" | grep -q -- "$flag"; then
+      echo "FAIL: empty new keys should not emit '$flag'"
+      echo "$out"
+      return 1
+    fi
+  done
+}

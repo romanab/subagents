@@ -35,3 +35,37 @@ test_network_isolated_profile_unshares_net() {
     return 1
   fi
 }
+
+test_default_profile_empty_new_keys_produce_no_spurious_args() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cp "$dir/../profiles/default.profile" "$tmp/.subagent/config"
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  for flag in '--dev-bind-try' '--setenv' '--unsetenv'; do
+    if echo "$out" | grep -q -- "$flag"; then
+      echo "FAIL: default profile empty new keys must not emit '$flag'"
+      echo "$out"
+      return 1
+    fi
+  done
+}
+
+test_network_isolated_profile_empty_new_keys_produce_no_spurious_args() {
+  local tmp out
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/.subagent"
+  cp "$dir/../profiles/network-isolated.profile" "$tmp/.subagent/config"
+  out=$(SUBAGENTS_TEST_HOME="$tmp" "$dir/../bin/bwrap-config-apply" --user alice --dry-run)
+  rm -rf "$tmp"
+
+  for flag in '--dev-bind-try' '--setenv' '--unsetenv'; do
+    if echo "$out" | grep -q -- "$flag"; then
+      echo "FAIL: network-isolated profile empty new keys must not emit '$flag'"
+      echo "$out"
+      return 1
+    fi
+  done
+}
