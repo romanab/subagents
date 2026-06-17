@@ -96,6 +96,13 @@ group-owned by the subaccount's own (single-member) group so only `agents`/root 
 write it. Neither is directly writable by `agents` except through the wrapper scripts. A
 subaccount can never loosen its own sandbox.
 
+Note: from *inside* bwrap, `agents`-owned files appear as `nobody:nogroup`. bwrap
+creates a user namespace in which only the calling subaccount's UID is mapped; the
+`agents` UID (60000) has no mapping, so the kernel substitutes the overflow UID 65534
+(`nobody`/`nogroup`). This is expected — the ownership and permission rules are
+unchanged, and the `r-x` group bits on `launcher` still work because the subaccount's
+own GID is mapped.
+
 The **sticky bit** (`chmod +t`) is set on each subaccount's home directory by
 `create-subaccount` after `setup-skeleton` chowns it to the subaccount. Without it, the
 subaccount (who owns the home directory) could delete or rename the root-owned
