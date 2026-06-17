@@ -112,9 +112,10 @@ agents ALL=(root) NOPASSWD: /home/agents/bin/create-subaccount, \
   /home/agents/bin/group-delete, /home/agents/bin/exec-in
 ```
 
-`bwrap-config-apply`, `setup-skeleton`, and `find-free-subagent-id` are internal —
+`setup-skeleton` and `find-free-subagent-id` are internal —
 called by the scripts above, not invoked directly by `agents`, but still live in the
-root-owned `bin/` dir. `show-subaccount` requires no sudo — it is read-only and all
+root-owned `bin/` dir. `bwrap-config-apply` is in the sudoers allowlist so `agents`
+can trigger a plain launcher regeneration without a dummy `bwrap-config-set` call. `show-subaccount` requires no sudo — it is read-only and all
 data it reads is accessible to `agents` directly.
 
 **GECOS tag safeguard:** `create-subaccount` sets GECOS to `subagent-managed - <comment>`.
@@ -276,7 +277,7 @@ group — standard `groupdel` behavior) and removes `/home/agents/shared/devs`.
 | `create-subaccount --user NAME [--profile NAME] [--extra-groups LIST] [--comment TEXT] [--dry-run]` | Holds a lock (`/var/lock/subagents-id-alloc.lock`) while allocating a paired UID/GID via `find-free-subagent-id`, then `groupadd -g <id> NAME`, `useradd -m -u <id> -g <id> -s /home/agents/bin/subagent-shell -c "subagent-managed - <comment>"`. Runs `setup-skeleton`, sets the sticky bit on `$HOME` (so the subaccount can't delete the root-owned `.subagent/`), then copies profile → `.subagent/config` and runs `bwrap-config-apply`. An ERR trap rolls back any partial state (orphan group or user) on failure. |
 | `delete-subaccount --user NAME [--do-not-backup-home-dir] [--dry-run]` | Verifies GECOS tag (abort if missing), sends SIGTERM to the user's processes then SIGKILL after 1 s to ensure they are gone before `userdel -r`, runs `backup-subaccount` (unless `--do-not-backup-home-dir`), `userdel -r`. |
 | `modify-subaccount --user NAME [--extra-groups LIST] [--remove-groups LIST] [--comment TEXT] [--dry-run]` | Thin `usermod`/`gpasswd` wrapper; preserves the `subagent-managed -` GECOS prefix. `--remove-groups` calls `gpasswd -d` per group and prints two warnings: one about the stale bind mount in the config, and one that the **running session still has group access** until terminated — with a `pkill -u` command to revoke immediately. |
-| `bwrap-config-apply --user NAME` | Internal. Reads `.subagent/config`, regenerates `.subagent/launcher` from scratch. The generated launcher accepts an optional command via `$@`; when called with no args it starts `/bin/bash` (normal session); when called with args it passes them to bwrap as the init command (used by `exec-in --sandbox`). |
+| `bwrap-config-apply --user NAME` | Reads `.subagent/config`, regenerates `.subagent/launcher` from scratch. The generated launcher accepts an optional command via `$@`; when called with no args it starts `/bin/bash` (normal session); when called with args it passes them to bwrap as the init command (used by `exec-in --sandbox`). |
 | `find-free-subagent-id` | Internal. Prints the lowest unused UID/GID in 50000-59999 (checking both `getent passwd` and `getent group`), or exits 1 if the range is exhausted. Called by `create-subaccount` and `group-create` while holding the allocation lock. |
 | `bwrap-config-set --user NAME (--set KEY=VALUE \| --remove-bind KEY VALUE) [--dry-run]` | Edits one key in `.subagent/config`, then calls `bwrap-config-apply`. The tighten/loosen entry point. `--remove-bind` removes a single space-delimited entry from any list key (RO_BINDS, RW_BINDS, EXTRA_RO_BINDS, DEV_BINDS, EXTRA_RW_BINDS, TMPFS_MOUNTS, ENV_SET, ENV_UNSET). For `--set`, validates that NETWORK is one of `full`, `loopback`, or `none`; bind/mount paths must be absolute and free of `..`; ENV_SET/ENV_UNSET names must match `[A-Za-z_][A-Za-z0-9_]*`. |
 | `setup-skeleton --user NAME [--skeleton PATH]` | Internal (called by `create-subaccount`). Copies `/home/agents/skel/` (or `--skeleton` dir) into `/home/<user>`, `chown -R` to the subuser. |

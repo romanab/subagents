@@ -81,14 +81,14 @@ SCRIPT="$1"
 shift
 
 case "$SCRIPT" in
-  create-subaccount|delete-subaccount|modify-subaccount|bwrap-config-set|group-create|group-delete|exec-in)
+  create-subaccount|delete-subaccount|modify-subaccount|bwrap-config-apply|bwrap-config-set|group-create|group-delete|exec-in)
     if [[ -n "$SUDO_CMD" ]]; then
       exec "$SUDO_CMD" "$SCRIPT_DIR/$SCRIPT" "$@"
     else
       exec "$SCRIPT_DIR/$SCRIPT" "$@"
     fi
     ;;
-  setup-skeleton|backup-subaccount|bwrap-config-apply|show-subaccount)
+  setup-skeleton|backup-subaccount|show-subaccount)
     exec "$SCRIPT_DIR/$SCRIPT" "$@"
     ;;
   *)
